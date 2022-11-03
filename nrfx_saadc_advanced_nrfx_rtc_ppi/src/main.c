@@ -18,6 +18,7 @@ LOG_MODULE_REGISTER(nrfx_saadc_lowpower_sample, LOG_LEVEL_INF);
 
 static nrf_ppi_channel_t m_rtc_saadc_start_ppi_channel;
 static nrf_ppi_channel_t m_rtc_saadc_sample_ppi_channel;
+static nrf_ppi_channel_t m_rtc_clear_ppi_channel;
 
 static volatile bool is_ready = true;
 static nrf_saadc_value_t samples[SAADC_CHANNEL_COUNT];
@@ -31,9 +32,6 @@ static void saadc_event_handler(nrfx_saadc_evt_t const * p_event)
         case NRFX_SAADC_EVT_FINISHED:
             LOG_INF("ADC Values: %6d",
                 p_event->data.done.p_buffer[0]);
-            break;
-
-        case NRFX_SAADC_EVT_BUF_REQ:
             // Set up the next available buffer
             err = nrfx_saadc_buffer_set(&samples[0], SAADC_CHANNEL_COUNT);
             if (err != NRFX_SUCCESS) {
@@ -41,7 +39,7 @@ static void saadc_event_handler(nrfx_saadc_evt_t const * p_event)
                 return;
             }
             break;
-                default:
+        default:
             LOG_INF("SAADC evt %d", p_event->type);
             break;
     }
@@ -54,6 +52,7 @@ const nrfx_rtc_t rtc = NRFX_RTC_INSTANCE(2); /**< Declaring an instance of nrf_d
  */
 static void rtc_event_handler(nrfx_rtc_int_type_t int_type)
 {
+    LOG_INF("RTC handler");
 }
 
 /** @brief Function initialization and configuration of RTC driver instance.
@@ -91,6 +90,11 @@ static void ppi_configure(void)
         LOG_ERR("nrfx_ppi_channel_alloc error: %08x", err);
         return;
     }
+    err = nrfx_ppi_channel_alloc(&m_rtc_clear_ppi_channel);
+    if (err != NRFX_SUCCESS) {
+        LOG_ERR("nrfx_ppi_channel_alloc error: %08x", err);
+        return;
+    }
     err = nrfx_ppi_channel_alloc(&m_rtc_saadc_sample_ppi_channel);
     if (err != NRFX_SUCCESS) {
         LOG_ERR("nrfx_ppi_channel_alloc error: %08x", err);
@@ -105,12 +109,25 @@ static void ppi_configure(void)
         return;
     }
 
+    err = nrfx_ppi_channel_assign(m_rtc_clear_ppi_channel, 
+                                       nrfx_rtc_event_address_get(&rtc, NRF_RTC_EVENT_COMPARE_0),
+                                       nrfx_rtc_task_address_get(&rtc, NRF_RTC_TASK_CLEAR));
+    if (err != NRFX_SUCCESS) {
+        LOG_ERR("nrfx_ppi_channel_assign error: %08x", err);
+        return;
+    }
+
     err = nrfx_ppi_channel_assign(m_rtc_saadc_sample_ppi_channel, 
                                        nrf_saadc_event_address_get(NRF_SAADC, NRF_SAADC_EVENT_STARTED),
                                        nrf_saadc_task_address_get(NRF_SAADC, NRF_SAADC_TASK_SAMPLE));
     
 
     err = nrfx_ppi_channel_enable(m_rtc_saadc_start_ppi_channel);
+    if (err != NRFX_SUCCESS) {
+        LOG_ERR("nrfx_ppi_channel_enable error: %08x", err);
+        return;
+    }
+    err = nrfx_ppi_channel_enable(m_rtc_clear_ppi_channel);
     if (err != NRFX_SUCCESS) {
         LOG_ERR("nrfx_ppi_channel_enable error: %08x", err);
         return;
@@ -197,9 +214,14 @@ void main(void)
 		    DT_IRQ(DT_NODELABEL(adc), priority),
 		    nrfx_isr, nrfx_saadc_irq_handler, 0);
 
+    IRQ_CONNECT(DT_IRQN(DT_NODELABEL(rtc2)),
+		    DT_IRQ(DT_NODELABEL(rtc2), priority),
+		    nrfx_isr, nrfx_rtc_2_irq_handler, 0);
+
     adc_configure();
     ppi_configure();
     rtc_configure();
 
+    //while(1);
 
 }
